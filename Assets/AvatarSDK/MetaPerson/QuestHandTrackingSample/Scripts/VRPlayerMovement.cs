@@ -1,13 +1,16 @@
 using UnityEngine;
+using Photon.Pun;
 
 [RequireComponent(typeof(CharacterController))]
-public class VRPlayerMovement : MonoBehaviour
+public class VRPlayerMovement : MonoBehaviourPun
 {
     public Transform head;
     public float moveSpeed = 2f;
-
     public float snapTurnAngle = 30f;
     public float turnCooldown = 0.35f;
+
+    [Header("Animation")]
+    public Animator avatarAnimator;
 
     private CharacterController controller;
     private float nextTurnTime;
@@ -15,6 +18,12 @@ public class VRPlayerMovement : MonoBehaviour
     void Start()
     {
         controller = GetComponent<CharacterController>();
+
+        if (!photonView.IsMine)
+        {
+            enabled = false;
+            return;
+        }
     }
 
     void Update()
@@ -35,12 +44,19 @@ public class VRPlayerMovement : MonoBehaviour
 
         controller.Move(direction * moveSpeed * Time.deltaTime);
 
-        // Lock height
+        // update animation speed
+        if (avatarAnimator != null)
+        {
+            float speed = new Vector2(move.x, move.y).magnitude;
+            avatarAnimator.SetFloat("Speed", speed);
+        }
+
+        // lock height
         Vector3 pos = transform.position;
         pos.y = 0;
         transform.position = pos;
 
-        // Snap turn
+        // snap turn
         if (Time.time >= nextTurnTime)
         {
             if (turn.x > 0.7f)

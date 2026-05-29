@@ -1,6 +1,5 @@
 using UnityEngine;
 using Photon.Pun;
-using AvatarSDK.MetaPerson.Oculus;
 
 public class NetworkedPlayer : MonoBehaviourPun, IPunObservable
 {
@@ -15,26 +14,25 @@ public class NetworkedPlayer : MonoBehaviourPun, IPunObservable
     public OVRSkeleton leftHandSkeleton;
     public OVRSkeleton rightHandSkeleton;
 
-    [Header("Avatar Reference")]
-    public AvatarRootFollower avatarRootFollower;
-    public OVRToMetaPersonSkeletonSync skeletonSync;
-
     [Header("Remote Avatar Bones")]
     public Transform remoteLeftHand;
     public Transform remoteRightHand;
     public Transform remoteHead;
 
-    // received data
+    // network received transforms
     private Vector3 receivedPosition;
     private Quaternion receivedRotation;
+
     private Vector3 receivedHeadPos;
     private Quaternion receivedHeadRot;
+
     private Vector3 receivedLeftHandPos;
     private Quaternion receivedLeftHandRot;
+
     private Vector3 receivedRightHandPos;
     private Quaternion receivedRightHandRot;
 
-    // finger bones - 24 bones per hand
+    // finger rotations
     private Quaternion[] receivedLeftFingers = new Quaternion[24];
     private Quaternion[] receivedRightFingers = new Quaternion[24];
 
@@ -42,57 +40,114 @@ public class NetworkedPlayer : MonoBehaviourPun, IPunObservable
     {
         if (photonView.IsMine)
         {
-            Debug.Log("Local player ready.");
+            Debug.Log("Local Player Active");
         }
         else
         {
-            DisableLocalOnlyComponents();
+            SetupRemotePlayer();
         }
     }
 
-    void DisableLocalOnlyComponents()
+    void SetupRemotePlayer()
     {
-        if (skeletonSync != null)
-            skeletonSync.enabled = false;
-
-        if (avatarRootFollower != null)
-            avatarRootFollower.enabled = false;
-
+        // disable movement only
         VRPlayerMovement movement = GetComponent<VRPlayerMovement>();
+
         if (movement != null)
             movement.enabled = false;
 
-        OVRCameraRig cameraRig = GetComponentInChildren<OVRCameraRig>();
-        if (cameraRig != null)
-            cameraRig.gameObject.SetActive(false);
+        // IMPORTANT:
+        // DO NOT disable entire OVRCameraRig GameObject
+        // it breaks transform chains
+
+        OVRCameraRig rig = GetComponentInChildren<OVRCameraRig>();
+
+        if (rig != null)
+        {
+            Camera cam = rig.GetComponentInChildren<Camera>();
+
+            if (cam != null)
+                cam.enabled = false;
+
+            AudioListener listener = rig.GetComponentInChildren<AudioListener>();
+
+            if (listener != null)
+                listener.enabled = false;
+        }
+
+        // DO NOT disable:
+        // AvatarIKController
+        // AvatarRootFollower
+        // SkeletonSync
+        //
+        // Those were causing T-pose and broken anatomy
     }
 
     void Update()
     {
         if (!photonView.IsMine)
         {
-            // move root
-            transform.position = Vector3.Lerp(transform.position, receivedPosition, Time.deltaTime * 15f);
-            transform.rotation = Quaternion.Lerp(transform.rotation, receivedRotation, Time.deltaTime * 15f);
+            // root movement
+            transform.position = Vector3.Lerp(
+                transform.position,
+                receivedPosition,
+                Time.deltaTime * 15f
+            );
 
-            // move hands and head on remote avatar
+            transform.rotation = Quaternion.Lerp(
+                transform.rotation,
+                receivedRotation,
+                Time.deltaTime * 15f
+            );
+
+            // head
             if (remoteHead != null)
             {
-                remoteHead.position = Vector3.Lerp(remoteHead.position, receivedHeadPos, Time.deltaTime * 20f);
-                remoteHead.rotation = Quaternion.Lerp(remoteHead.rotation, receivedHeadRot, Time.deltaTime * 20f);
-            }
-            if (remoteLeftHand != null)
-            {
-                remoteLeftHand.position = Vector3.Lerp(remoteLeftHand.position, receivedLeftHandPos, Time.deltaTime * 20f);
-                remoteLeftHand.rotation = Quaternion.Lerp(remoteLeftHand.rotation, receivedLeftHandRot, Time.deltaTime * 20f);
-            }
-            if (remoteRightHand != null)
-            {
-                remoteRightHand.position = Vector3.Lerp(remoteRightHand.position, receivedRightHandPos, Time.deltaTime * 20f);
-                remoteRightHand.rotation = Quaternion.Lerp(remoteRightHand.rotation, receivedRightHandRot, Time.deltaTime * 20f);
+                remoteHead.position = Vector3.Lerp(
+                    remoteHead.position,
+                    receivedHeadPos,
+                    Time.deltaTime * 20f
+                );
+
+                remoteHead.rotation = Quaternion.Lerp(
+                    remoteHead.rotation,
+                    receivedHeadRot,
+                    Time.deltaTime * 20f
+                );
             }
 
-            // apply finger rotations
+            // left hand
+            if (remoteLeftHand != null)
+            {
+                remoteLeftHand.position = Vector3.Lerp(
+                    remoteLeftHand.position,
+                    receivedLeftHandPos,
+                    Time.deltaTime * 20f
+                );
+
+                remoteLeftHand.rotation = Quaternion.Lerp(
+                    remoteLeftHand.rotation,
+                    receivedLeftHandRot,
+                    Time.deltaTime * 20f
+                );
+            }
+
+            // right hand
+            if (remoteRightHand != null)
+            {
+                remoteRightHand.position = Vector3.Lerp(
+                    remoteRightHand.position,
+                    receivedRightHandPos,
+                    Time.deltaTime * 20f
+                );
+
+                remoteRightHand.rotation = Quaternion.Lerp(
+                    remoteRightHand.rotation,
+                    receivedRightHandRot,
+                    Time.deltaTime * 20f
+                );
+            }
+
             ApplyFingerRotations();
         }
     }
@@ -101,88 +156,155 @@ public class NetworkedPlayer : MonoBehaviourPun, IPunObservable
     {
         if (leftHandSkeleton != null && leftHandSkeleton.Bones != null)
         {
-            for (int i = 0; i < Mathf.Min(24, leftHandSkeleton.Bones.Count); i++)
-                leftHandSkeleton.Bones[i].Transform.localRotation = receivedLeftFingers[i];
+            int count = Mathf.Min(24, leftHandSkeleton.Bones.Count);
+
+            for (int i = 0; i < count; i++)
+            {
+                if (leftHandSkeleton.Bones[i] != null)
+                {
+                    leftHandSkeleton.Bones[i].Transform.localRotation =
+                        receivedLeftFingers[i];
+                }
+            }
         }
 
         if (rightHandSkeleton != null && rightHandSkeleton.Bones != null)
         {
-            for (int i = 0; i < Mathf.Min(24, rightHandSkeleton.Bones.Count); i++)
-                rightHandSkeleton.Bones[i].Transform.localRotation = receivedRightFingers[i];
+            int count = Mathf.Min(24, rightHandSkeleton.Bones.Count);
+
+            for (int i = 0; i < count; i++)
+            {
+                if (rightHandSkeleton.Bones[i] != null)
+                {
+                    rightHandSkeleton.Bones[i].Transform.localRotation =
+                        receivedRightFingers[i];
+                }
+            }
         }
     }
 
-    public void OnPhotonSerializeView(PhotonStream stream, PhotonMessageInfo info)
+    public void OnPhotonSerializeView(
+        PhotonStream stream,
+        PhotonMessageInfo info
+    )
     {
         if (stream.IsWriting)
         {
-            // root
+            // ROOT
             stream.SendNext(transform.position);
             stream.SendNext(transform.rotation);
 
-            // head
+            // HEAD
             stream.SendNext(headTransform.position);
             stream.SendNext(headTransform.rotation);
 
-            // hands
+            // LEFT HAND
             stream.SendNext(leftHandTransform.position);
             stream.SendNext(leftHandTransform.rotation);
+
+            // RIGHT HAND
             stream.SendNext(rightHandTransform.position);
             stream.SendNext(rightHandTransform.rotation);
 
-            // left fingers
-            bool leftTracked = leftOVRHand != null && leftOVRHand.IsTracked;
+            // LEFT FINGERS
+            bool leftTracked =
+                leftOVRHand != null &&
+                leftOVRHand.IsTracked &&
+                leftHandSkeleton != null;
+
             stream.SendNext(leftTracked);
-            if (leftTracked && leftHandSkeleton != null)
+
+            if (leftTracked)
             {
-                for (int i = 0; i < Mathf.Min(24, leftHandSkeleton.Bones.Count); i++)
-                    stream.SendNext(leftHandSkeleton.Bones[i].Transform.localRotation);
+                int count = Mathf.Min(24, leftHandSkeleton.Bones.Count);
+
+                for (int i = 0; i < count; i++)
+                {
+                    stream.SendNext(
+                        leftHandSkeleton.Bones[i].Transform.localRotation
+                    );
+                }
+
+                for (int i = count; i < 24; i++)
+                {
+                    stream.SendNext(Quaternion.identity);
+                }
             }
             else
             {
                 for (int i = 0; i < 24; i++)
+                {
                     stream.SendNext(Quaternion.identity);
+                }
             }
 
-            // right fingers
-            bool rightTracked = rightOVRHand != null && rightOVRHand.IsTracked;
+            // RIGHT FINGERS
+            bool rightTracked =
+                rightOVRHand != null &&
+                rightOVRHand.IsTracked &&
+                rightHandSkeleton != null;
+
             stream.SendNext(rightTracked);
-            if (rightTracked && rightHandSkeleton != null)
+
+            if (rightTracked)
             {
-                for (int i = 0; i < Mathf.Min(24, rightHandSkeleton.Bones.Count); i++)
-                    stream.SendNext(rightHandSkeleton.Bones[i].Transform.localRotation);
+                int count = Mathf.Min(24, rightHandSkeleton.Bones.Count);
+
+                for (int i = 0; i < count; i++)
+                {
+                    stream.SendNext(
+                        rightHandSkeleton.Bones[i].Transform.localRotation
+                    );
+                }
+
+                for (int i = count; i < 24; i++)
+                {
+                    stream.SendNext(Quaternion.identity);
+                }
             }
             else
             {
                 for (int i = 0; i < 24; i++)
+                {
                     stream.SendNext(Quaternion.identity);
+                }
             }
         }
         else
         {
-            // root
+            // ROOT
             receivedPosition = (Vector3)stream.ReceiveNext();
             receivedRotation = (Quaternion)stream.ReceiveNext();
 
-            // head
+            // HEAD
             receivedHeadPos = (Vector3)stream.ReceiveNext();
             receivedHeadRot = (Quaternion)stream.ReceiveNext();
 
-            // hands
+            // LEFT HAND
             receivedLeftHandPos = (Vector3)stream.ReceiveNext();
             receivedLeftHandRot = (Quaternion)stream.ReceiveNext();
+
+            // RIGHT HAND
             receivedRightHandPos = (Vector3)stream.ReceiveNext();
             receivedRightHandRot = (Quaternion)stream.ReceiveNext();
 
-            // left fingers
+            // LEFT FINGERS
             bool leftTracked = (bool)stream.ReceiveNext();
-            for (int i = 0; i < 24; i++)
-                receivedLeftFingers[i] = (Quaternion)stream.ReceiveNext();
 
-            // right fingers
-            bool rightTracked = (bool)stream.ReceiveNext();
             for (int i = 0; i < 24; i++)
-                receivedRightFingers[i] = (Quaternion)stream.ReceiveNext();
+            {
+                receivedLeftFingers[i] =
+                    (Quaternion)stream.ReceiveNext();
+            }
+
+            // RIGHT FINGERS
+            bool rightTracked = (bool)stream.ReceiveNext();
+
+            for (int i = 0; i < 24; i++)
+            {
+                receivedRightFingers[i] =
+                    (Quaternion)stream.ReceiveNext();
+            }
         }
     }
 }
